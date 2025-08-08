@@ -159,15 +159,29 @@ async def scrape_candidates(start_url):
                         street, plz, ort = m.groups()
                         addr = f"{street}, {plz} {ort}"
                         break
-            link = url
+            # Link direkt aus dem Projekt-Container, nur individuelle Projektseiten
+            link = None
+            for a in tag.find_all("a", href=True):
+                l = a["href"]
+                # Nur Links mit eindeutiger ID/Slug (z.B. Zahl, Name, kein /projekt/ oder /projekte/)
+                if re.search(r"/(projekt|projekte)/[\w\-]+", l) and not l.endswith("/projekt") and not l.endswith("/projekte"):
+                    link = l if l.startswith("http") else urljoin(url, l)
+                    break
+            if not link:
+                continue
             if len(txt) < 30 or not name or not addr:
                 continue
             if any(x in name.lower() for x in ["cookiebot", "youtube", "facebook", "instagram", "twitter", "notwendig", "vormerkung", "kundencenter", "kontakt", "impressum", "datenschutz"]):
                 continue
             if "tel:" in link or "mailto:" in link:
                 continue
-            key = (name, addr)
+            if any(x in name.lower() for x in ["lage", "über uns", "ihr ansprechpartner", "ansprechpartner", "qualität", "fertigstellung", "baubeginn", "elementum marchtrenk", "verfügbare wohnungen", "ähnliche projekte"]):
+                continue
+            key = (name.lower().strip(), addr.lower().strip(), link.lower().strip())
             if key in seen:
+                continue
+            # Filtere Links, die auf generische Projektübersicht zeigen
+            if re.search(r"/projekt/?$", link):
                 continue
             seen.add(key)
             res.append({"tag": tag, "text": txt, "link": link})
