@@ -1,4 +1,1 @@
-https://ooewohnbau.at/immobiliensuche
-https://www.haller.at/immobilien
-https://www.haslehner.net/immobilien/
-https://www.heimat-oesterreich.at/de/Projekte
+https://www.haslehner.net/projekte/?currentPage=1

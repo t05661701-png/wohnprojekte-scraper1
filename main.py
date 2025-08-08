@@ -98,9 +98,14 @@ async def scrape_candidates(start_url):
     async def scrape_detail(url):
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, timeout=60000)
-            await page.wait_for_load_state("networkidle")
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+            page = await context.new_page()
+            try:
+                await page.goto(url, timeout=60000)
+                await page.wait_for_load_state("networkidle", timeout=60000)
+            except Exception as e:
+                print(f"Warnung: Timeout oder Fehler bei {url}: {e}")
+                await asyncio.sleep(3)
             html = await page.content()
             await browser.close()
         soup = BeautifulSoup(html, "html.parser")
@@ -186,8 +191,12 @@ async def scrape_candidates(start_url):
                     tasks.append(scrape_detail(lhref))
                 else:
                     tasks.append(scrape_detail(urljoin(pl, lhref)))
-    # 6. Starte alle Detail-Scrapes parallel
-    await asyncio.gather(*tasks)
+    # 6. Starte alle Detail-Scrapes mit Begrenzung auf 3 gleichzeitig
+    sem = asyncio.Semaphore(3)
+    async def sem_task(task):
+        async with sem:
+            await task
+    await asyncio.gather(*(sem_task(t) for t in tasks))
     return res
 
 def map_to_table(candidates):
