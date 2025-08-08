@@ -53,23 +53,145 @@ def extract_address(text):
     return ""
 
 async def scrape_candidates(start_url):
+    import pytesseract
+    from PIL import Image
+    import io
+    # ...existing code...
+    # 1. Generische Formular-Erkennung und Ausfüllen
+    async def fill_and_submit_forms(page):
+        try:
+            forms = await page.query_selector_all('form')
+            for form in forms:
+                inputs = await form.query_selector_all('input[type="text"], input:not([type]), input[type="search"]')
+                for inp in inputs:
+                    try:
+                        await inp.fill("Wohnung")
+                    except Exception:
+                        pass
+                selects = await form.query_selector_all('select')
+                for sel in selects:
+                    try:
+                        await sel.select_option(value="Wohnung")
+                    except Exception:
+                        try:
+                            opts = await sel.query_selector_all('option')
+                            if opts:
+                                val = await opts[0].get_attribute('value')
+                                if val:
+                                    await sel.select_option(value=val)
+                        except Exception:
+                            pass
+                btns = await form.query_selector_all('button, input[type="submit"]')
+                for btn in btns:
+                    txt = (await btn.get_attribute('value') or await btn.inner_text()).lower()
+                    if any(x in txt for x in ["suche", "start", "anzeigen", "finden"]):
+                        try:
+                            await btn.click()
+                            await asyncio.sleep(3)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"Generische Formular-Erkennung Fehler: {e}")
+
+    # 2. Mitschneiden von XHR/API-Requests, um dynamisch geladene Daten zu extrahieren
+    api_results = []
+    def handle_response(response):
+        try:
+            ct = response.headers.get('content-type', '')
+            if 'application/json' in ct:
+                body = response.body()
+                if body:
+                    try:
+                        data = json.loads(body)
+                        api_results.append(data)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        page.on('response', handle_response)
+        await page.goto(start_url, timeout=60000)
+        await page.wait_for_load_state("networkidle")
+        await fill_and_submit_forms(page)
+        # Spezialfall: ooewohnbau.at/immobiliensuche – Formular ausfüllen und absenden
+        if "ooewohnbau.at/immobiliensuche" in start_url:
+            try:
+                await page.select_option("select[name='objektart']", value="Wohnung")
+            except Exception:
+                pass
+            try:
+                btn = await page.query_selector("button:has-text('Suche starten')")
+                if btn:
+                    await btn.click()
+                    await asyncio.sleep(3)
+            except Exception as e:
+                print(f"Formular-Fehler: {e}")
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto(start_url, timeout=60000)
         await page.wait_for_load_state("networkidle")
+        # Spezialfall: ooewohnbau.at/immobiliensuche – Formular ausfüllen und absenden
+        if "ooewohnbau.at/immobiliensuche" in start_url:
+            try:
+                # Wähle z.B. "Wohnung" als Kategorie, falls vorhanden
+                await page.select_option("select[name='objektart']", value="Wohnung")
+            except Exception:
+                pass
+            try:
+                # Klicke auf "Suche starten" Button
+                btn = await page.query_selector("button:has-text('Suche starten')")
+                if btn:
+                    await btn.click()
+                    await asyncio.sleep(3)
+            except Exception as e:
+                print(f"Formular-Fehler: {e}")
         last_h = await page.evaluate("document.body.scrollHeight")
         same = 0
+        # Automatisches Klicken auf 'Mehr laden', 'Weitere anzeigen', 'Suche starten' Buttons
+        max_clicks = 10
+        for i in range(max_clicks):
+            found = False
+            # Suche nach Buttons mit typischen Texten
+            for btn_text in ["mehr", "weiter", "anzeigen", "laden", "suche", "filter", "anzeigen", "weitere", "anzeigen", "anzeigen", "anzeigen"]:
+                try:
+                    btn = await page.query_selector(f'button:has-text("{btn_text}")')
+                    if btn:
+                        await btn.click()
+                        await asyncio.sleep(2)
+                        found = True
+                        print(f"Button '{btn_text}' geklickt.")
+                except Exception:
+                    continue
+            if not found:
+                break
         while same < 3:
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            try:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            except Exception as e:
+                print(f"Warnung: Scroll-Fehler: {e}")
             await asyncio.sleep(1)
-            new_h = await page.evaluate("document.body.scrollHeight")
+            try:
+                new_h = await page.evaluate("document.body.scrollHeight")
+            except Exception as e:
+                print(f"Warnung: Scroll-Höhe Fehler: {e}")
+                break
             if new_h == last_h:
                 same += 1
             else:
                 same = 0
                 last_h = new_h
         html = await page.content()
+        # Fallback: Screenshot & OCR, falls keine Kandidaten
+        screenshot_bytes = None
+        if not screenshot_bytes:
+            try:
+                screenshot_bytes = await page.screenshot(full_page=True)
+            except Exception as e:
+                print(f"Screenshot-Fehler: {e}")
         await browser.close()
 
     soup = BeautifulSoup(html, "html.parser")
@@ -94,7 +216,53 @@ async def scrape_candidates(start_url):
                 page_links.add(lhref)
             else:
                 page_links.add(urljoin(start_url, lhref))
-    # 3. Scrape alle Detailseiten
+
+    # 3. Falls keine HTML-Kandidaten gefunden wurden, versuche API-Responses auszuwerten
+    if not detail_links and api_results:
+        for api_data in api_results:
+            # ...wie bisher...
+            if isinstance(api_data, dict):
+                for k, v in api_data.items():
+                    if isinstance(v, list):
+                        for item in v:
+                            name = item.get("projektname") or item.get("name") or item.get("titel") or ""
+                            addr = item.get("adresse") or item.get("ort") or item.get("location") or ""
+                            link = item.get("link") or item.get("url") or start_url
+                            if name and addr:
+                                key = (name.lower().strip(), addr.lower().strip(), link.lower().strip())
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                res.append({"tag": None, "text": f"{name} {addr}", "link": link})
+            elif isinstance(api_data, list):
+                for item in api_data:
+                    name = item.get("projektname") or item.get("name") or item.get("titel") or ""
+                    addr = item.get("adresse") or item.get("ort") or item.get("location") or ""
+                    link = item.get("link") or item.get("url") or start_url
+                    if name and addr:
+                        key = (name.lower().strip(), addr.lower().strip(), link.lower().strip())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        res.append({"tag": None, "text": f"{name} {addr}", "link": link})
+
+    # 4. Fallback: Wenn immer noch keine Kandidaten, nutze Screenshot und OCR
+    if not res and screenshot_bytes:
+        try:
+            img = Image.open(io.BytesIO(screenshot_bytes))
+            ocr_text = pytesseract.image_to_string(img, lang='deu')
+            for line in ocr_text.splitlines():
+                addr = extract_address(line)
+                name = line.strip() if 3 <= len(line.strip()) <= 80 and not line.strip().isdigit() else ""
+                if addr and name:
+                    key = (name.lower().strip(), addr.lower().strip(), start_url)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    res.append({"tag": None, "text": line, "link": start_url})
+            print("OCR-Fallback verwendet!")
+        except Exception as e:
+            print(f"OCR/Screenshot-Fehler: {e}")
     async def scrape_detail(url):
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
