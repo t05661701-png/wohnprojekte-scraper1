@@ -28,6 +28,8 @@ def extract_traeger_from_url(url):
     return domain.replace("-", " ").title()
 
 def extract_project_name(tag):
+    if not tag:   # <--- Schutz
+        return ""
     # Suche nach typischen Projektname-Elementen
     for heading in tag.find_all(["h1", "h2", "h3", "strong", "b"]):
         txt = heading.get_text(" ", strip=True)
@@ -39,6 +41,7 @@ def extract_project_name(tag):
         if 3 <= len(line) <= 80 and not line.isdigit():
             return line
     return ""
+
 
 def extract_address(text):
     m = RE_ADDRESS.search(text)
@@ -382,12 +385,11 @@ async def scrape_candidates(start_url):
     return res
 
 def map_to_table(candidates):
-    # traeger wird jetzt dynamisch übergeben
     def get_traeger(c):
         return extract_traeger_from_url(c["link"])
     rows = []
     for idx, c in enumerate(candidates, start=1):
-        name = extract_project_name(c["tag"])
+        name = extract_project_name(c.get("tag"))
         addr = extract_address(c["text"])
         if not name or not addr:
             continue
@@ -400,20 +402,7 @@ def map_to_table(candidates):
             "Link": c["link"]
         })
     return rows
-    rows = []
-    for idx, c in enumerate(candidates, start=1):
-        name = extract_project_name(c["tag"])
-        addr = extract_address(c["text"])
-        if not name or not addr:
-            continue
-        rows.append({
-            "Nr.": idx,
-            "Wohnbauträger": traeger,
-            "Projektname": name,
-            "Adresse": addr,
-            "Link": c["link"]
-        })
-    return rows
+
 
 def upload_to_google_sheet(rows):
     if not WEBAPP_URL:
